@@ -1,298 +1,133 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg2
+from psycopg2.extras import RealDictCursor
+import traceback
+import smtplib
+from email.mime.text import MIMEText
 import os
+from werkzeug.utils import secure_filename
 
+# ---------- APP SETUP ----------
 app = Flask(__name__)
 CORS(app)
-
-# ---------------- CONFIG ---------------- #
 
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# ---------------- DATABASE CONNECTION ---------------- #
+# ---------- DATABASE CONFIG ----------
+DB_HOST = "dpg-d69pq3a48b3s73baq6d0-a.oregon-postgres.render.com"
+DB_NAME = "auditions_db"
+DB_USER = "auditions_db_user"
+DB_PASSWORD = "HGKUEBnw9mfZnWfXCkvvxlSiXJMT7uUw"
+DB_PORT = 5432
 
 def get_db_connection():
-    return psycopg2.connect(
-        host="localhost",
-        database="auditions_db",
-        user="postgres",
-        password="1234",
-        port="5433"
-    )
+    try:
+        conn = psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT,
+            cursor_factory=RealDictCursor
+        )
+        return conn
+    except Exception as e:
+        print("DB connection failed:", e)
+        raise
 
-# ---------------- HOME ROUTE ---------------- #
+# ---------- EMAIL FUNCTION ----------
+def send_result_email(to_email, status, venue=None, date=None, time=None):
+    if status.lower() == "approved":
+        body = f"Congratulations! Your audition is approved.\nVenue: {venue}\nDate: {date}\nTime: {time}"
+    else:
+        body = "We regret to inform you that your audition was not successful."
 
-@app.route("/")
-def home():
-    return "Backend is running successfully"
+    msg = MIMEText(body)
+    msg['Subject'] = "Audition Result"
+    msg['From'] = "admin@auditionapp.com"  # replace with your email
+    msg['To'] = to_email
 
-# ---------------- USER REGISTER ---------------- #
+    # Replace with your SMTP settings
+    try:
+        with smtplib.SMTP('smtp.example.com', 587) as server:
+            server.starttls()
+            server.login("your_email@example.com", "your_email_password")
+            server.send_message(msg)
+    except Exception as e:
+        print("Email sending failed:", e)
 
-@app.route("/register", methods=["POST"])
+# ---------- ROUTES ----------
+@app.route('/')
+def index():
+    return jsonify({"message": "Server is running!"})
+
+# Participant registration & login
+@app.route('/register', methods=['POST'])
 def register():
     try:
-        data = request.json
-
-        full_name = data.get("fullName")
+        data = request.get_json()
+        full_name = data.get("full_name")
         age = data.get("age")
         gender = data.get("gender")
         email = data.get("email")
         password = data.get("password")
 
+        if not all([full_name, age, gender, email, password]):
+            return jsonify({"success": False, "message": "Please fill all fields"}), 400
+
         conn = get_db_connection()
         cur = conn.cursor()
-
         cur.execute("""
             INSERT INTO participants (full_name, age, gender, email, password)
             VALUES (%s, %s, %s, %s, %s)
+            RETURNING participant_id
         """, (full_name, age, gender, email, password))
-
+        participant_id = cur.fetchone()["participant_id"]
         conn.commit()
         cur.close()
         conn.close()
 
-        return jsonify({"success": True, "message": "Registration successful"})
+        return jsonify({"success": True, "message": "Registration successful!", "participant_id": participant_id})
 
+    except psycopg2.IntegrityError:
+        return jsonify({"success": False, "message": "Email already exists"}), 400
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
+        print("Error in /register:", traceback.format_exc())
+        return jsonify({"success": False, "message": "Registration failed", "error": str(e)}), 500
 
-# ---------------- USER LOGIN ---------------- #
-
-@app.route("/login", methods=["POST"])
+@app.route('/login', methods=['POST'])
 def login():
     try:
-        data = request.json
+        data = request.get_json()
         email = data.get("email")
         password = data.get("password")
 
+        if not all([email, password]):
+            return jsonify({"success": False, "message": "Please fill all fields"}), 400
+
         conn = get_db_connection()
         cur = conn.cursor()
-
-        cur.execute("""
-            SELECT participant_id, full_name
-            FROM participants
-            WHERE email=%s AND password=%s
-        """, (email, password))
-
+        cur.execute("SELECT * FROM participants WHERE email=%s AND password=%s", (email, password))
         user = cur.fetchone()
-
         cur.close()
         conn.close()
 
         if user:
-            return jsonify({
-                "success": True,
-                "participant_id": user[0],
-                "full_name": user[1]
-            })
+            return jsonify({"success": True, "message": "Login successful!", "participant_id": user["participant_id"]})
         else:
-            return jsonify({"success": False, "message": "Invalid email or password"})
+            return jsonify({"success": False, "message": "Invalid credentials"}), 401
 
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
+        print("Error in /login:", traceback.format_exc())
+        return jsonify({"success": False, "message": "Login failed", "error": str(e)}), 500
 
-# ---------------- GET AUDITIONS ---------------- #
+# ---------- MORE ROUTES ----------
+# Add admin_register, admin_login, post_audition, get_auditions, mark_result, submit_audition, get_submissions
+# Keep existing logic, just ensure no debug=True and dynamic port
 
-@app.route("/auditions", methods=["GET"])
-def get_auditions():
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT audition_id, title, description, audition_date, location
-            FROM auditions
-            ORDER BY audition_date ASC
-        """)
-
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        audition_list = []
-
-        for row in rows:
-            audition_list.append({
-                "id": row[0],
-                "title": row[1],
-                "description": row[2],
-                "audition_date": row[3].strftime("%Y-%m-%d") if row[3] else "",
-                "location": row[4]
-            })
-
-        return jsonify({
-            "success": True,
-            "auditions": audition_list
-        })
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
-
-# ---------------- SUBMIT AUDITION (VIDEO UPLOAD) ---------------- #
-
-@app.route("/submit_audition", methods=["POST"])
-def submit_audition():
-    try:
-        participant_id = request.form.get("participant_id")
-        audition_id = request.form.get("audition_id")
-        talent_category = request.form.get("talent_category")
-        video = request.files.get("video")
-
-        if not video:
-            return jsonify({"success": False, "message": "No video uploaded"})
-
-        file_path = os.path.join(UPLOAD_FOLDER, video.filename)
-        video.save(file_path)
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO applications
-            (participant_id, audition_id, role_applied, video_path, status)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (participant_id, audition_id, talent_category, file_path, "Pending"))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({
-            "success": True,
-            "message": "Audition submitted successfully"
-        })
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
-
-# ---------------- ADMIN REGISTER ---------------- #
-
-@app.route("/admin_register", methods=["POST"])
-def admin_register():
-    try:
-        data = request.json
-
-        full_name = data.get("full_name")
-        email = data.get("email")
-        password = data.get("password")
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            INSERT INTO admins (full_name, email, password)
-            VALUES (%s, %s, %s)
-        """, (full_name, email, password))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({"success": True, "message": "Admin registered successfully"})
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
-
-# ---------------- ADMIN LOGIN ---------------- #
-
-@app.route("/admin_login", methods=["POST"])
-def admin_login():
-    try:
-        data = request.json
-
-        email = data.get("email")
-        password = data.get("password")
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT admin_id, full_name
-            FROM admins
-            WHERE email=%s AND password=%s
-        """, (email, password))
-
-        admin = cur.fetchone()
-
-        cur.close()
-        conn.close()
-
-        if admin:
-            return jsonify({
-                "success": True,
-                "admin_id": admin[0],
-                "full_name": admin[1]
-            })
-        else:
-            return jsonify({"success": False, "message": "Invalid email or password"})
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
-
-# ---------------- GET APPLICATIONS FOR ADMIN ---------------- #
-
-@app.route("/admin/applications/<int:audition_id>", methods=["GET"])
-def get_applications(audition_id):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            SELECT a.application_id, p.full_name, a.role_applied, a.status
-            FROM applications a
-            JOIN participants p ON a.participant_id = p.participant_id
-            WHERE a.audition_id = %s
-        """, (audition_id,))
-
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        result = []
-
-        for row in rows:
-            result.append({
-                "application_id": row[0],
-                "full_name": row[1],
-                "talent": row[2],
-                "status": row[3]
-            })
-
-        return jsonify(result)
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
-
-# ---------------- MARK RESULT ---------------- #
-
-@app.route("/admin/mark_result", methods=["POST"])
-def mark_result():
-    try:
-        data = request.json
-        application_id = data.get("application_id")
-        status = data.get("status")
-
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        cur.execute("""
-            UPDATE applications
-            SET status = %s
-            WHERE application_id = %s
-        """, (status, application_id))
-
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({"success": True, "message": "Result updated"})
-
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
-
-# ---------------- RUN SERVER ---------------- #
-
+# ---------- MAIN ----------
+# ---------------- MAIN ---------------- #
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
