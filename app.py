@@ -128,6 +128,8 @@ def login():
 # Keep existing logic, just ensure no debug=True and dynamic port
 
 # ---------- MAIN ----------
-# ---------------- MAIN ---------------- #
+@app.route("/ping")
+def ping():
+    return {"status": "ok"}
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
