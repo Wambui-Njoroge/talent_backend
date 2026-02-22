@@ -272,25 +272,58 @@ def submit_audition():
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
-@app.route('/admin/submissions', methods=['GET'])
-def get_submissions():
+@app.route('/admin/submissions/<int:admin_id>', methods=['GET'])
+def get_submissions(admin_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
         cur.execute("""
-            SELECT id, participant_name, participant_age, participant_gender,
-                   participant_email, video_path, image_path, status
-            FROM submissions
-            ORDER BY id DESC
-        """)
-        submissions = cur.fetchall()
+            SELECT
+                s.id,
+                s.participant_name,
+                s.participant_age,
+                s.participant_gender,
+                s.participant_email,
+                s.video_path,
+                s.image_path,
+                s.status
+            FROM submissions s
+            JOIN auditions a ON s.audition_id = a.audition_id
+            WHERE a.created_by = %s
+            ORDER BY s.id DESC
+        """, (admin_id,))
+
+        rows = cur.fetchall()
+
+        # Convert to JSON-friendly format
+        submissions = []
+        for row in rows:
+            submissions.append({
+                "id": row[0],
+                "name": row[1],
+                "age": row[2],
+                "gender": row[3],
+                "email": row[4],
+                "video": row[5],
+                "image": row[6],
+                "status": row[7]
+            })
+
         cur.close()
         conn.close()
-        return jsonify({"success": True, "submissions": submissions})
+
+        return jsonify({
+            "success": True,
+            "submissions": submissions
+        })
+
     except Exception as e:
         print(traceback.format_exc())
-        return jsonify({"success": False, "message": str(e)}), 500
-
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
 @app.route('/mark_result', methods=['POST'])
 def mark_result():
     data = request.json
@@ -333,6 +366,7 @@ def mark_result():
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ---------- MAIN ----------
+import os
 if __name__ == "__main__":
     # Use Render port if available
     port = int(os.environ.get("PORT", 5000))
