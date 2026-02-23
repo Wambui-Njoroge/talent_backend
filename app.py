@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import psycopg2
@@ -24,7 +23,7 @@ DB_PASSWORD = "HGKUEBnw9mfZnWfXCkvvxlSiXJMT7uUw"
 DB_PORT = 5432
 
 def get_db_connection():
-    conn = psycopg2.connect(
+    return psycopg2.connect(
         host=DB_HOST,
         database=DB_NAME,
         user=DB_USER,
@@ -33,7 +32,6 @@ def get_db_connection():
         sslmode='require',
         cursor_factory=RealDictCursor
     )
-    return conn
 
 # ---------- EMAIL FUNCTION ----------
 def send_result_email(to_email, status, venue=None, date=None, time=None):
@@ -44,10 +42,9 @@ def send_result_email(to_email, status, venue=None, date=None, time=None):
 
     msg = MIMEText(body)
     msg['Subject'] = "Audition Result"
-    msg['From'] = "admin@auditionapp.com"  # replace with real email
+    msg['From'] = "admin@auditionapp.com"
     msg['To'] = to_email
 
-    # Optional: For testing
     try:
         with smtplib.SMTP('smtp.example.com', 587) as server:
             server.starttls()
@@ -56,12 +53,12 @@ def send_result_email(to_email, status, venue=None, date=None, time=None):
     except Exception as e:
         print("Email sending failed:", e)
 
-# -------------------- SUBMISSIONS --------------------
+# -------------------- SUBMIT AUDITION --------------------
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
         participant_id = request.form.get('participant_id')
-        audition_id = request.form.get('audition_id')  # 👈 added
+        audition_id = request.form.get('audition_id')
         name = request.form.get('name')
         age = request.form.get('age')
         gender = request.form.get('gender')
@@ -75,6 +72,7 @@ def submit_audition():
 
         video_filename = secure_filename(video.filename)
         image_filename = secure_filename(image.filename)
+
         video_path = os.path.join(UPLOAD_FOLDER, video_filename)
         image_path = os.path.join(UPLOAD_FOLDER, image_filename)
 
@@ -83,20 +81,25 @@ def submit_audition():
 
         conn = get_db_connection()
         cur = conn.cursor()
+
         cur.execute("""
             INSERT INTO submissions
-            (participant_id, audition_id, participant_name, participant_age, participant_gender, participant_email, video_path, image_path)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (participant_id, audition_id, participant_name, participant_age, participant_gender, participant_email, video_path, image_path, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')
         """, (participant_id, audition_id, name, age, gender, email, video_path, image_path))
+
         conn.commit()
         cur.close()
         conn.close()
 
-        return jsonify({"success": True, "message": "Submission successful! Await results."})
+        return jsonify({"success": True, "message": "Submission successful!"})
+
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
+
+# -------------------- GET ADMIN SUBMISSIONS --------------------
 @app.route('/admin/submissions/<int:admin_id>', methods=['GET'])
 def get_submissions(admin_id):
     try:
@@ -114,35 +117,71 @@ def get_submissions(admin_id):
                 s.image_path,
                 s.status
             FROM submissions s
-            JOIN auditions a ON s.audition_id = a.audition_id
+            JOIN auditions a ON s.audition_id = a.id
             WHERE a.created_by = %s
             ORDER BY s.id DESC
         """, (admin_id,))
 
         rows = cur.fetchall()
-        submissions = []
-        for row in rows:
-            submissions.append({
-                "id": row["id"],
-                "participant_name": row["participant_name"],
-                "participant_age": row["participant_age"],
-                "participant_gender": row["participant_gender"],
-                "participant_email": row["participant_email"],
-                "video_path": row["video_path"],
-                "image_path": row["image_path"],
-                "status": row["status"]
-            })
 
         cur.close()
         conn.close()
 
-        return jsonify({"success": True, "submissions": submissions})
+        return jsonify({
+            "success": True,
+            "submissions": rows
+        })
 
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
-        if __name__ == "__main__":
-            # Use Render port if available
-            port = int(os.environ.get("PORT", 5000))
-            app.run(host="0.0.0.0", port=port)
+
+# -------------------- MARK RESULT --------------------
+@app.route('/mark_result', methods=['POST'])
+def mark_result():
+    try:
+        data = request.json
+
+        application_id = data.get('application_id')
+        status = data.get('status')
+        venue = data.get('venue')
+        date = data.get('date')
+        time = data.get('time')
+
+        if not application_id or not status:
+            return jsonify({"success": False, "message": "Missing fields"}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            UPDATE submissions
+            SET status = %s,
+                venue = %s,
+                date = %s,
+                time = %s
+            WHERE id = %s
+            RETURNING participant_email
+        """, (status, venue, date, time, application_id))
+
+        result = cur.fetchone()
+
+        if result:
+            send_result_email(result['participant_email'], status, venue, date, time)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"success": True, "message": "Result updated successfully"})
+
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ---------- RUN APP ----------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
