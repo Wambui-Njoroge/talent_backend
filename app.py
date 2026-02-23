@@ -218,21 +218,17 @@ def post_audition():
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
-
 @app.route('/auditions', methods=['GET'])
 def get_auditions():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-
         cur.execute("""
-            SELECT id, title, description, audition_date, location
+            SELECT audition_id, title, description, audition_date, location
             FROM auditions
-            ORDER BY id DESC
+            ORDER BY audition_id DESC
         """)
-
         auditions = cur.fetchall()
-
         cur.close()
         conn.close()
 
@@ -247,7 +243,7 @@ def get_auditions():
             "success": False,
             "auditions": [],
             "message": str(e)
-        }), 500# -------- SUBMISSIONS & RESULTS --------
+        }), 500
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
@@ -256,15 +252,17 @@ def submit_audition():
         gender = request.form.get('gender')
         email = request.form.get('email')
         participant_id = request.form.get('participant_id')
+        audition_id = request.form.get('audition_id')  # 👈 ADD THIS
 
         video = request.files.get('video')
         image = request.files.get('image')
 
-        if not all([name, age, gender, email, video, image]):
+        if not all([name, age, gender, email, video, image, audition_id]):
             return jsonify({"success": False, "message": "All fields required"}), 400
 
         video_filename = secure_filename(video.filename)
         image_filename = secure_filename(image.filename)
+
         video_path = os.path.join(UPLOAD_FOLDER, video_filename)
         image_path = os.path.join(UPLOAD_FOLDER, image_filename)
 
@@ -273,35 +271,47 @@ def submit_audition():
 
         conn = get_db_connection()
         cur = conn.cursor()
+
         cur.execute("""
             INSERT INTO submissions
-            (participant_id, participant_name, participant_age, participant_gender, participant_email, video_path, image_path)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (participant_id, name, age, gender, email, video_path, image_path))
+            (participant_id, participant_name, participant_age, participant_gender,
+             participant_email, audition_id, video_path, image_path)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (participant_id, name, age, gender, email, audition_id, video_path, image_path))
+
         conn.commit()
         cur.close()
         conn.close()
 
-        return jsonify({"success": True, "message": "Submission successful! Await results."})
+        return jsonify({"success": True, "message": "Submission successful!"})
+
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
-
 @app.route('/admin/submissions', methods=['GET'])
 def get_submissions():
     try:
+        admin_id = request.args.get('admin_id')  # 👈 GET ADMIN
+
         conn = get_db_connection()
         cur = conn.cursor()
+
         cur.execute("""
-            SELECT id, participant_name, participant_age, participant_gender,
-                   participant_email, video_path, image_path, status
-            FROM submissions
-            ORDER BY id DESC
-        """)
+            SELECT s.id, s.participant_name, s.participant_age, s.participant_gender,
+                   s.participant_email, s.video_path, s.image_path, s.status
+            FROM submissions s
+            JOIN auditions a ON s.audition_id = a.audition_id
+            WHERE a.created_by = %s
+            ORDER BY s.id DESC
+        """, (admin_id,))
+
         submissions = cur.fetchall()
+
         cur.close()
         conn.close()
+
         return jsonify({"success": True, "submissions": submissions})
+
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
