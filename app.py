@@ -247,7 +247,7 @@ def get_auditions():
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
-        name = request.form.get('name')
+        name = request.form.get('full_name')
         age = request.form.get('age')
         gender = request.form.get('gender')
         email = request.form.get('email')
