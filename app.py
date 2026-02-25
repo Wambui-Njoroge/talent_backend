@@ -51,7 +51,6 @@ def send_result_email(to_email, status, venue=None, date=None, time=None):
     msg['From'] = "admin@auditionapp.com"  # replace with your email
     msg['To'] = to_email
 
-    # Optional: For testing, comment out email sending or use real SMTP
     try:
         with smtplib.SMTP('smtp.example.com', 587) as server:
             server.starttls()
@@ -61,7 +60,6 @@ def send_result_email(to_email, status, venue=None, date=None, time=None):
         print("Email sending failed:", e)
 
 # ---------- ROUTES ----------
-
 @app.route('/')
 def index():
     return jsonify({"message": "Server is running!"})
@@ -86,21 +84,17 @@ def register():
 
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(
-            """
+        cur.execute("""
             INSERT INTO participants (full_name, age, gender, email, password)
             VALUES (%s, %s, %s, %s, %s)
             RETURNING participant_id
-            """,
-            (full_name, age, gender, email, password)
-        )
+        """, (full_name, age, gender, email, password))
         participant_id = cur.fetchone()["participant_id"]
         conn.commit()
         cur.close()
         conn.close()
 
         return jsonify({"success": True, "message": "Registration successful!", "participant_id": participant_id})
-
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "message": "Email already exists"}), 400
     except Exception as e:
@@ -128,7 +122,6 @@ def login():
             return jsonify({"success": True, "message": "Login successful!", "participant_id": user["participant_id"]})
         else:
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
-
     except Exception as e:
         print("Error in /login:", traceback.format_exc())
         return jsonify({"success": False, "message": "Login failed", "error": str(e)}), 500
@@ -147,17 +140,17 @@ def admin_register():
 
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO admins (full_name, email, password) VALUES (%s, %s, %s) RETURNING admin_id",
-            (full_name, email, password)
-        )
+        cur.execute("""
+            INSERT INTO admins (full_name, email, password)
+            VALUES (%s, %s, %s)
+            RETURNING admin_id
+        """, (full_name, email, password))
         admin_id = cur.fetchone()["admin_id"]
         conn.commit()
         cur.close()
         conn.close()
 
         return jsonify({"success": True, "message": "Admin registered!", "admin_id": admin_id})
-
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "message": "Email already exists"}), 400
     except Exception as e:
@@ -185,7 +178,6 @@ def admin_login():
             return jsonify({"success": True, "message": "Login successful!", "admin_id": admin["admin_id"]})
         else:
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
-
     except Exception as e:
         print("Error in /admin_login:", traceback.format_exc())
         return jsonify({"success": False, "message": "Login failed", "error": str(e)}), 500
@@ -206,10 +198,10 @@ def post_audition():
 
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO auditions (title, description, audition_date, location, created_by) VALUES (%s,%s,%s,%s,%s)",
-            (title, description, audition_date, location, created_by)
-        )
+        cur.execute("""
+            INSERT INTO auditions (title, description, audition_date, location, created_by)
+            VALUES (%s,%s,%s,%s,%s)
+        """, (title, description, audition_date, location, created_by))
         conn.commit()
         cur.close()
         conn.close()
@@ -218,6 +210,7 @@ def post_audition():
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
+
 @app.route('/auditions', methods=['GET'])
 def get_auditions():
     try:
@@ -232,33 +225,26 @@ def get_auditions():
         cur.close()
         conn.close()
 
-        return jsonify({
-            "success": True,
-            "auditions": auditions
-        })
-
+        return jsonify({"success": True, "auditions": auditions})
     except Exception as e:
         print(traceback.format_exc())
-        return jsonify({
-            "success": False,
-            "auditions": [],
-            "message": str(e)
-        }), 500
+        return jsonify({"success": False, "auditions": [], "message": str(e)}), 500
+
+# -------- SUBMIT AUDITION --------
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
-        # Match Kotlin Retrofit keys exactly
-        name = request.form.get('name')                   # etName
-        age = request.form.get('age')                     # etAge
-        gender = request.form.get('gender')               # etGender
-        email = request.form.get('email')                 # etEmail
+        # Match Kotlin Retrofit keys
+        name = request.form.get('name')
+        age = request.form.get('age')
+        gender = request.form.get('gender')
+        email = request.form.get('email')
         participant_id = request.form.get('participant_id')
         audition_id = request.form.get('audition_id')
 
         video = request.files.get('video')
         image = request.files.get('image')
 
-        # Validate all fields
         if not all([name, age, gender, email, participant_id, audition_id, video, image]):
             return jsonify({"success": False, "message": "All fields required"}), 400
 
@@ -286,58 +272,52 @@ def submit_audition():
         conn.close()
 
         return jsonify({"success": True, "message": "Submission successful!"})
-
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
- @app.route('/admin/submissions', methods=['GET'])
- def get_submissions():
-     try:
-         admin_id = request.args.get('admin_id')  # Get admin ID from query param
+# -------- ADMIN SUBMISSIONS --------
+@app.route('/admin/submissions', methods=['GET'])
+def get_submissions():
+    try:
+        admin_id = request.args.get('admin_id')
+        if not admin_id:
+            return jsonify({"success": False, "message": "Admin ID required"}), 400
 
-         if not admin_id:
-             return jsonify({"success": False, "message": "Admin ID required"}), 400
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT s.id, s.participant_id, s.participant_name, s.participant_age,
+                   s.participant_gender, s.participant_email, s.video_path, s.image_path, s.status
+            FROM submissions s
+            JOIN auditions a ON s.audition_id = a.audition_id
+            WHERE a.created_by = %s
+            ORDER BY s.id DESC
+        """, (admin_id,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
 
-         conn = get_db_connection()
-         cur = conn.cursor()
+        submissions = []
+        for row in rows:
+            submissions.append({
+                "id": row[0],
+                "participant_id": row[1],
+                "participant_name": row[2],
+                "participant_age": row[3],
+                "participant_gender": row[4],
+                "participant_email": row[5],
+                "video_path": row[6],
+                "image_path": row[7],
+                "status": row[8]
+            })
 
-         # Fetch submissions for auditions created by this admin
-         cur.execute("""
-             SELECT s.id, s.participant_id, s.participant_name, s.participant_age,
-                    s.participant_gender, s.participant_email, s.video_path, s.image_path, s.status
-             FROM submissions s
-             JOIN auditions a ON s.audition_id = a.audition_id
-             WHERE a.created_by = %s
-             ORDER BY s.id DESC
-         """, (admin_id,))
+        return jsonify({"success": True, "submissions": submissions})
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"success": False, "message": str(e)}), 500
 
-         rows = cur.fetchall()
-         submissions = []
-         for row in rows:
-             submissions.append({
-                 "id": row[0],
-                 "participant_id": row[1],
-                 "participant_name": row[2],
-                 "participant_age": row[3],
-                 "participant_gender": row[4],
-                 "participant_email": row[5],
-                 "video_path": row[6],
-                 "image_path": row[7],
-                 "status": row[8]
-             })
-
-         cur.close()
-         conn.close()
-
-         return jsonify({"success": True, "submissions": submissions})
-
-     except Exception as e:
-         print(traceback.format_exc())
-         return jsonify({"success": False, "message": str(e)}), 500
 # ---------- MAIN ----------
 if __name__ == "__main__":
-    # Use Render port if available
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
