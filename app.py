@@ -234,48 +234,55 @@ def get_auditions():
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
-        # Match Kotlin Retrofit keys
-        name = request.form.get('name')
-        age = request.form.get('age')
-        gender = request.form.get('gender')
-        email = request.form.get('email')
+        # Get form data
+        name = request.form.get('name')           # etName
+        age = request.form.get('age')             # etAge
+        gender = request.form.get('gender')       # etGender
+        email = request.form.get('email')         # etEmail
         participant_id = request.form.get('participant_id')
         audition_id = request.form.get('audition_id')
 
         video = request.files.get('video')
         image = request.files.get('image')
 
+        # Validate all fields
         if not all([name, age, gender, email, participant_id, audition_id, video, image]):
             return jsonify({"success": False, "message": "All fields required"}), 400
 
-        # Save files
+        # Connect to DB
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Check if audition_id exists
+        cur.execute("SELECT 1 FROM auditions WHERE audition_id = %s", (audition_id,))
+        if not cur.fetchone():
+            return jsonify({"success": False, "message": f"Audition ID {audition_id} does not exist"}), 400
+
+        # Save uploaded files
         video_filename = secure_filename(video.filename)
         image_filename = secure_filename(image.filename)
-
         video_path = os.path.join(UPLOAD_FOLDER, video_filename)
         image_path = os.path.join(UPLOAD_FOLDER, image_filename)
-
         video.save(video_path)
         image.save(image_path)
 
-        # Insert into DB
-        conn = get_db_connection()
-        cur = conn.cursor()
+        # Insert submission
         cur.execute("""
             INSERT INTO submissions
             (participant_id, participant_name, participant_age, participant_gender,
              participant_email, audition_id, video_path, image_path)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (participant_id, name, age, gender, email, audition_id, video_path, image_path))
+
         conn.commit()
         cur.close()
         conn.close()
 
         return jsonify({"success": True, "message": "Submission successful!"})
+
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
-
 # -------- ADMIN SUBMISSIONS --------
 @app.route('/admin/submissions', methods=['GET'])
 def get_submissions():
