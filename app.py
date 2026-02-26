@@ -245,9 +245,20 @@ def submit_audition():
         video = request.files.get('video')
         image = request.files.get('image')
 
-        # Validate all fields
+        # Validate all fields exist
         if not all([name, age, gender, email, participant_id, audition_id, video, image]):
-            return jsonify({"success": False, "message": "All fields required"}), 400
+            return jsonify({"success": False, "message": "All fields are required"}), 400
+
+        # Convert IDs to integers safely
+        try:
+            participant_id = int(participant_id)
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "message": "Invalid participant_id"}), 400
+
+        try:
+            audition_id = int(audition_id)
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "message": "Invalid audition_id"}), 400
 
         # Connect to DB
         conn = get_db_connection()
@@ -266,7 +277,7 @@ def submit_audition():
         video.save(video_path)
         image.save(image_path)
 
-        # Insert submission
+        # Insert submission into DB
         cur.execute("""
             INSERT INTO submissions
             (participant_id, participant_name, participant_age, participant_gender,
