@@ -14,6 +14,7 @@ from email.mime.text import MIMEText
 app = Flask(__name__)
 CORS(app)
 
+
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -24,6 +25,12 @@ DB_USER = "auditions_db_user"
 DB_PASSWORD = "HGKUEBnw9mfZnWfXCkvvxlSiXJMT7uUw"
 DB_PORT = 5432
 
+
+from flask import send_from_directory
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(UPLOAD_FOLDER, filename)
 def get_db_connection():
     try:
         conn = psycopg2.connect(
@@ -41,24 +48,25 @@ def get_db_connection():
         raise
 
 # ---------- EMAIL FUNCTION ----------
-def send_result_email(to_email, status, venue=None, date=None, time=None):
+def send_notification(participant_id, status, venue=None, date=None, time=None):
     if status.lower() == "approved":
-        body = f"Congratulations! Your audition is approved.\nVenue: {venue}\nDate: {date}\nTime: {time}"
+        message = f"Congratulations! Your audition is approved.\nVenue: {venue}\nDate: {date}\nTime: {time}"
     else:
-        body = "We regret to inform you that your audition was not successful."
-
-    msg = MIMEText(body)
-    msg['Subject'] = "Audition Result"
-    msg['From'] = "admin@auditionapp.com"  # replace with your email
-    msg['To'] = to_email
+        message = "We regret to inform you that your audition was not successful."
 
     try:
-        with smtplib.SMTP('smtp.example.com', 587) as server:
-            server.starttls()
-            server.login("your_email@example.com", "your_email_password")
-            server.send_message(msg)
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO notifications (participant_id, message) VALUES (%s, %s)",
+            (participant_id, message)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Notification saved to DB")
     except Exception as e:
-        print("Email sending failed:", e)
+        print("Notification failed:", e)
 
 # ---------- ROUTES ----------
 @app.route('/')
@@ -346,7 +354,67 @@ def get_submissions():
         return jsonify({"success": True, "submissions": submissions})
     except Exception as e:
         print(traceback.format_exc())
+        return jsonify({"success": False, "message": str(e)}), 50
+@app.route("/notifications/<int:participant_id>", methods=["GET"])
+def get_notifications(participant_id):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, message, is_read, created_at
+            FROM notifications
+            WHERE participant_id=%s
+            ORDER BY created_at DESC
+        """, (participant_id,))
+        notifications = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({"success": True, "notifications": notifications})
+    except Exception as e:
+        print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
+# ---------- APPROVE / REJECT SUBMISSION ----------
+@app.route("/admin/submission_action", methods=["POST"])
+def submission_action():
+    try:
+        data = request.get_json()
+        submission_id = data.get("submission_id")
+        action = data.get("action")  # "approve" or "reject"
+        venue = data.get("venue")  # optional, only for approve
+        date = data.get("date")    # optional, only for approve
+        time = data.get("time")    # optional, only for approve
+
+        if not all([submission_id, action]) or action not in ["approve", "reject"]:
+            return jsonify({"success": False, "message": "Invalid data"}), 400
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Fetch participant_id first
+        cur.execute("SELECT participant_id FROM submissions WHERE id=%s", (submission_id,))
+        row = cur.fetchone()
+        if not row:
+            return jsonify({"success": False, "message": "Submission not found"}), 404
+
+        participant_id = row["participant_id"]
+
+        # Update submission status
+        cur.execute(
+            "UPDATE submissions SET status=%s WHERE id=%s",
+            (action, submission_id)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        # Send in-app notification
+        send_notification(participant_id, action, venue=venue, date=date, time=time)
+
+        return jsonify({"success": True, "message": f"Submission {action}d successfully!"})
+
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"success": False, "message": "Server error", "error": str(e)}), 500
 # ---------- MAIN ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
