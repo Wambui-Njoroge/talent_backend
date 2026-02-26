@@ -274,14 +274,14 @@ def submit_audition():
         except (ValueError, TypeError):
             return jsonify({"success": False, "message": "Age must be a number"}), 400
 
-        # ---------- 4️⃣ Check audition exists ----------
+        # ---------- 4 Check audition exists ----------
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT 1 FROM auditions WHERE audition_id = %s", (audition_id,))
         if not cur.fetchone():
             return jsonify({"success": False, "message": f"Audition ID {audition_id} does not exist"}), 400
 
-        # ---------- 5️⃣ Save uploaded files with unique filenames ----------
+        # ---------- 5 Save uploaded files with unique filenames ----------
         video_filename = f"{uuid.uuid4()}_{secure_filename(video.filename)}"
         image_filename = f"{uuid.uuid4()}_{secure_filename(image.filename)}"
         video_path = os.path.join(UPLOAD_FOLDER, video_filename)
@@ -289,7 +289,7 @@ def submit_audition():
         video.save(video_path)
         image.save(image_path)
 
-        # ---------- 6️⃣ Insert submission into DB ----------
+        # ---------- 6 Insert submission into DB ----------
         cur.execute("""
             INSERT INTO submissions
             (participant_id, participant_name, participant_age, participant_gender,
@@ -300,7 +300,7 @@ def submit_audition():
         cur.close()
         conn.close()
 
-        # ---------- 7️⃣ Return success ----------
+        # ---------- 7 Return success ----------
         return jsonify({
             "success": True,
             "message": "Submission successful!",
