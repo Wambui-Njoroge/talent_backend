@@ -234,22 +234,22 @@ def get_auditions():
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
-        # Get form data
-        name = request.form.get('name')           # etName
-        age = request.form.get('age')             # etAge
-        gender = request.form.get('gender')       # etGender
-        email = request.form.get('email')         # etEmail
+        # ---------- 1️⃣ Get form data ----------
+        name = request.form.get('name')
+        age = request.form.get('age')
+        gender = request.form.get('gender')
+        email = request.form.get('email')
         participant_id = request.form.get('participant_id')
         audition_id = request.form.get('audition_id')
 
         video = request.files.get('video')
         image = request.files.get('image')
 
-        # Validate all fields exist
+        # ---------- 2️⃣ Validate required fields ----------
         if not all([name, age, gender, email, participant_id, audition_id, video, image]):
             return jsonify({"success": False, "message": "All fields are required"}), 400
 
-        # Convert IDs to integers safely
+        # ---------- 3️⃣ Convert IDs and age safely ----------
         try:
             participant_id = int(participant_id)
         except (ValueError, TypeError):
@@ -260,40 +260,48 @@ def submit_audition():
         except (ValueError, TypeError):
             return jsonify({"success": False, "message": "Invalid audition_id"}), 400
 
-        # Connect to DB
+        try:
+            age = int(age)
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "message": "Age must be a number"}), 400
+
+        # ---------- 4️⃣ Check audition exists ----------
         conn = get_db_connection()
         cur = conn.cursor()
-
-        # Check if audition_id exists
         cur.execute("SELECT 1 FROM auditions WHERE audition_id = %s", (audition_id,))
         if not cur.fetchone():
             return jsonify({"success": False, "message": f"Audition ID {audition_id} does not exist"}), 400
 
-        # Save uploaded files
-        video_filename = secure_filename(video.filename)
-        image_filename = secure_filename(image.filename)
+        # ---------- 5️⃣ Save uploaded files with unique filenames ----------
+        video_filename = f"{uuid.uuid4()}_{secure_filename(video.filename)}"
+        image_filename = f"{uuid.uuid4()}_{secure_filename(image.filename)}"
         video_path = os.path.join(UPLOAD_FOLDER, video_filename)
         image_path = os.path.join(UPLOAD_FOLDER, image_filename)
         video.save(video_path)
         image.save(image_path)
 
-        # Insert submission into DB
+        # ---------- 6️⃣ Insert submission into DB ----------
         cur.execute("""
             INSERT INTO submissions
             (participant_id, participant_name, participant_age, participant_gender,
              participant_email, audition_id, video_path, image_path)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """, (participant_id, name, age, gender, email, audition_id, video_path, image_path))
-
         conn.commit()
         cur.close()
         conn.close()
 
-        return jsonify({"success": True, "message": "Submission successful!"})
+        # ---------- 7️⃣ Return success ----------
+        return jsonify({
+            "success": True,
+            "message": "Submission successful!",
+            "video_path": video_path,   # optional for debugging
+            "image_path": image_path
+        })
 
     except Exception as e:
         print(traceback.format_exc())
-        return jsonify({"success": False, "message": str(e)}), 500
+        return jsonify({"success": False, "message": "Server error", "error": str(e)}), 500
 # -------- ADMIN SUBMISSIONS --------
 @app.route('/admin/submissions', methods=['GET'])
 def get_submissions():
