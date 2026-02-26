@@ -301,6 +301,10 @@ def get_submissions():
         admin_id = request.args.get('admin_id')
         if not admin_id:
             return jsonify({"success": False, "message": "Admin ID required"}), 400
+        try:
+            admin_id = int(admin_id)
+        except ValueError:
+            return jsonify({"success": False, "message": "Admin ID must be an integer"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
@@ -315,26 +319,25 @@ def get_submissions():
         rows = cur.fetchall()
         cur.close()
         conn.close()
-
         submissions = []
         for row in rows:
+            # Safely unpack row values
             submissions.append({
-                "id": row[0],
-                "participant_id": row[1],
-                "participant_name": row[2],
-                "participant_age": row[3],
-                "participant_gender": row[4],
-                "participant_email": row[5],
-                "video_path": row[6],
-                "image_path": row[7],
-                "status": row[8]
+                "id": row.get("id"),
+                "participant_id": row.get("participant_id"),
+                "participant_name": row.get("participant_name"),
+                "participant_age": row.get("participant_age"),
+                "participant_gender": row.get("participant_gender"),
+                "participant_email": row.get("participant_email"),
+                "video_path": row.get("video_path"),
+                "image_path": row.get("image_path"),
+                "status": row.get("status", "pending")
             })
 
         return jsonify({"success": True, "submissions": submissions})
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
-
 # ---------- MAIN ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
