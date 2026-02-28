@@ -278,7 +278,12 @@ def register():
         cur.close()
         conn.close()
 
-        return jsonify({"success": True, "message": "Registration successful!", "participant_id": participant_id})
+        # CHANGED: Return success but DON'T auto-login
+        return jsonify({
+            "success": True,
+            "message": "Registration successful! Please login to continue.",
+            "requires_login": True  # Flag for the Android app to navigate to login
+        })
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "message": "Email already exists"}), 400
     except Exception as e:
@@ -303,7 +308,15 @@ def login():
         conn.close()
 
         if user:
-            return jsonify({"success": True, "message": "Login successful!", "participant_id": user["participant_id"]})
+            return jsonify({
+                "success": True, 
+                "message": "Login successful!", 
+                "participant_id": user["participant_id"],
+                "full_name": user["full_name"],
+                "age": user["age"],
+                "gender": user["gender"],
+                "email": user["email"]
+            })
         else:
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
     except Exception as e:
@@ -311,43 +324,34 @@ def login():
         return jsonify({"success": False, "message": "Login failed", "error": str(e)}), 500
 
 # -------- ADMIN REGISTRATION & LOGIN --------
-
-
-@app.route('/register', methods=['POST'])
-def register():
+@app.route('/admin_register', methods=['POST'])
+def admin_register():
     try:
         data = request.get_json()
         full_name = data.get("full_name")
-        age = data.get("age")
-        gender = data.get("gender")
         email = data.get("email")
         password = data.get("password")
 
-        if not all([full_name, age, gender, email, password]):
-            return jsonify({"success": False, "message": "Please fill all fields"}), 400
+        if not all([full_name, email, password]):
+            return jsonify({"success": False, "message": "Fill all fields"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO participants (full_name, age, gender, email, password)
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING participant_id
-        """, (full_name, age, gender, email, password))
-        participant_id = cur.fetchone()["participant_id"]
+            INSERT INTO admins (full_name, email, password)
+            VALUES (%s, %s, %s)
+            RETURNING admin_id
+        """, (full_name, email, password))
+        admin_id = cur.fetchone()["admin_id"]
         conn.commit()
         cur.close()
         conn.close()
 
-        # CHANGED: Return success but DON'T auto-login
-        return jsonify({
-            "success": True, 
-            "message": "Registration successful! Please login to continue.",
-            "requires_login": True  # Add this flag for the Android app
-        })
+        return jsonify({"success": True, "message": "Admin registered! Please login.", "requires_login": True})
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "message": "Email already exists"}), 400
     except Exception as e:
-        print("Error in /register:", traceback.format_exc())
+        print("Error in /admin_register:", traceback.format_exc())
         return jsonify({"success": False, "message": "Registration failed", "error": str(e)}), 500
 
 @app.route('/admin_login', methods=['POST'])
@@ -368,7 +372,13 @@ def admin_login():
         conn.close()
 
         if admin:
-            return jsonify({"success": True, "message": "Login successful!", "admin_id": admin["admin_id"]})
+            return jsonify({
+                "success": True, 
+                "message": "Login successful!", 
+                "admin_id": admin["admin_id"],
+                "full_name": admin["full_name"],
+                "email": admin["email"]
+            })
         else:
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
     except Exception as e:
@@ -423,15 +433,11 @@ def get_auditions():
         print(traceback.format_exc())
         return jsonify({"success": False, "auditions": [], "message": str(e)}), 500
 
-# -------- SUBMIT AUDITION --------
+# -------- SUBMIT AUDITION (UPDATED) --------
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
-        # Get form data
-        name = request.form.get('name')
-        age = request.form.get('age')
-        gender = request.form.get('gender')
-        email = request.form.get('email')
+        # Get ONLY participant_id and audition_id from form
         participant_id = request.form.get('participant_id')
         audition_id = request.form.get('audition_id')
 
@@ -439,34 +445,41 @@ def submit_audition():
         image = request.files.get('image')
 
         # Validate required fields
-        if not all([name, age, gender, email, participant_id, audition_id, video, image]):
-            return jsonify({"success": False, "message": "All fields are required"}), 400
+        if not all([participant_id, audition_id, video, image]):
+            return jsonify({"success": False, "message": "Participant ID, Audition ID, video and image are required"}), 400
 
-        # Convert IDs and age safely
+        # Convert IDs safely
         try:
             participant_id = int(participant_id)
-        except (ValueError, TypeError):
-            return jsonify({"success": False, "message": "Invalid participant_id"}), 400
-
-        try:
             audition_id = int(audition_id)
         except (ValueError, TypeError):
-            return jsonify({"success": False, "message": "Invalid audition_id"}), 400
+            return jsonify({"success": False, "message": "Invalid ID format"}), 400
 
-        try:
-            age = int(age)
-        except (ValueError, TypeError):
-            return jsonify({"success": False, "message": "Age must be a number"}), 400
-
-        # Check audition exists
+        # Get participant details from database
         conn = get_db_connection()
         cur = conn.cursor()
+        
+        # Get participant info
+        cur.execute("""
+            SELECT full_name, age, gender, email 
+            FROM participants 
+            WHERE participant_id = %s
+        """, (participant_id,))
+        
+        participant = cur.fetchone()
+        if not participant:
+            cur.close()
+            conn.close()
+            return jsonify({"success": False, "message": "Participant not found"}), 404
+
+        # Check audition exists
         cur.execute("SELECT 1 FROM auditions WHERE audition_id = %s", (audition_id,))
         if not cur.fetchone():
+            cur.close()
+            conn.close()
             return jsonify({"success": False, "message": f"Audition ID {audition_id} does not exist"}), 400
 
         # Save uploaded files with unique filenames
-        # Generate unique filenames
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         video_filename = f"{timestamp}_{uuid.uuid4().hex[:8]}_{secure_filename(video.filename)}"
         image_filename = f"{timestamp}_{uuid.uuid4().hex[:8]}_{secure_filename(image.filename)}"
@@ -481,14 +494,24 @@ def submit_audition():
         print(f"Files saved: {video_path_full}, {image_path_full}")
         print(f"Files exist: {os.path.exists(video_path_full)}, {os.path.exists(image_path_full)}")
 
-        # Insert submission into DB (store only filename)
+        # Insert submission into DB using participant details from database
         cur.execute("""
             INSERT INTO submissions
             (participant_id, participant_name, participant_age, participant_gender,
              participant_email, audition_id, video_path, image_path, status)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (participant_id, name, age, gender, email, audition_id, video_filename, image_filename, 'pending'))
+        """, (
+            participant_id, 
+            participant['full_name'], 
+            participant['age'], 
+            participant['gender'],
+            participant['email'], 
+            audition_id, 
+            video_filename, 
+            image_filename, 
+            'pending'
+        ))
 
         submission_id = cur.fetchone()['id']
         conn.commit()
@@ -501,17 +524,38 @@ def submit_audition():
 
         return jsonify({
             "success": True,
-            "message": "Submission successful!",
+            "message": "Submission successful! You will be notified of the results.",
             "submission_id": submission_id,
             "video_url": video_url,
-            "image_url": image_url,
-            "video_filename": video_filename,
-            "image_filename": image_filename
+            "image_url": image_url
         })
 
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": "Server error", "error": str(e)}), 500
+
+# -------- TEST ENDPOINT TO VERIFY PARTICIPANT DETAILS --------
+@app.route('/test/participant/<int:participant_id>', methods=['GET'])
+def test_participant(participant_id):
+    """Test endpoint to verify participant details"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT participant_id, full_name, age, gender, email 
+            FROM participants 
+            WHERE participant_id = %s
+        """, (participant_id,))
+        participant = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if participant:
+            return jsonify({"success": True, "participant": participant})
+        else:
+            return jsonify({"success": False, "message": "Participant not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # -------- ADMIN SUBMISSIONS --------
 @app.route('/admin/submissions', methods=['GET'])
@@ -629,4 +673,4 @@ def submission_action():
 # ---------- MAIN ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
