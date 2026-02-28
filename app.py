@@ -71,9 +71,10 @@ def debug_paths():
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, participant_name, video_path, image_path, status
-            FROM submissions
-            ORDER BY id DESC
+            SELECT s.id, p.full_name as participant_name, s.video_path, s.image_path, s.status
+            FROM submissions s
+            JOIN participants p ON s.participant_id = p.participant_id
+            ORDER BY s.id DESC
             LIMIT 10
         """)
         submissions = cur.fetchall()
@@ -83,12 +84,10 @@ def debug_paths():
         # Check if files exist
         result = []
         for sub in submissions:
-            # Try both possible paths
             video_paths_to_check = [
                 os.path.join(UPLOAD_FOLDER_ABSOLUTE, sub['video_path']),
                 sub['video_path']
             ]
-
             image_paths_to_check = [
                 os.path.join(UPLOAD_FOLDER_ABSOLUTE, sub['image_path']),
                 sub['image_path']
@@ -135,46 +134,6 @@ def debug_paths():
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
-# ---------- TEST IMAGE ENDPOINT ----------
-@app.route('/test-image/<filename>')
-def test_image_page(filename):
-    file_path = os.path.join(UPLOAD_FOLDER_ABSOLUTE, filename)
-    file_exists = os.path.exists(file_path)
-    file_size = os.path.getsize(file_path) if file_exists else 0
-
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Image Test: {filename}</title>
-        <style>
-            body {{ font-family: Arial; padding: 20px; }}
-            .info {{ background: #f0f0f0; padding: 10px; border-radius: 5px; margin: 10px 0; }}
-            .success {{ color: green; }}
-            .error {{ color: red; }}
-            img {{ max-width: 500px; border: 2px solid #333; margin: 20px 0; }}
-        </style>
-    </head>
-    <body>
-        <h2>Testing Image: {filename}</h2>
-
-        <div class="info">
-            <p><strong>File exists:</strong> <span class="{'success' if file_exists else 'error'}">{file_exists}</span></p>
-            <p><strong>File size:</strong> {file_size} bytes</p>
-            <p><strong>Full path:</strong> {file_path}</p>
-            <p><strong>Direct URL:</strong> <a href="/uploads/{filename}" target="_blank">/uploads/{filename}</a></p>
-        </div>
-
-        <h3>Image Preview:</h3>
-        <img src="/uploads/{filename}"
-             onerror="this.onerror=null; this.src='https://via.placeholder.com/500x300?text=Image+Not+Found'; this.style.border='2px solid red';"
-             alt="Image preview">
-
-        <p><a href="/debug/paths">Back to Debug</a></p>
-    </body>
-    </html>
-    """
-
 # ---------- FILE SERVING ROUTE ----------
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
@@ -199,49 +158,6 @@ def uploaded_file(filename):
     except Exception as e:
         print(f"Error serving file {filename}: {e}")
         return "File not found", 404
-
-# ---------- GET FILE URL ENDPOINT ----------
-@app.route('/get_file_url/<int:submission_id>/<string:file_type>')
-def get_file_url(submission_id, file_type):
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-
-        if file_type == 'video':
-            cur.execute("SELECT video_path FROM submissions WHERE id = %s", (submission_id,))
-        else:
-            cur.execute("SELECT image_path FROM submissions WHERE id = %s", (submission_id,))
-
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-
-        if not result:
-            return jsonify({"success": False, "message": "Submission not found"}), 404
-
-        file_path = result['video_path'] if file_type == 'video' else result['image_path']
-
-        # Extract just the filename
-        filename = os.path.basename(file_path)
-
-        # Generate URL
-        file_url = url_for('uploaded_file', filename=filename, _external=True)
-
-        # Check if file actually exists
-        full_path = os.path.join(UPLOAD_FOLDER_ABSOLUTE, filename)
-        file_exists = os.path.exists(full_path)
-
-        return jsonify({
-            "success": True,
-            "file_url": file_url,
-            "filename": filename,
-            "original_path": file_path,
-            "file_exists": file_exists,
-            "full_path": full_path
-        })
-
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
 # ---------- ROUTES ----------
 @app.route('/')
@@ -278,11 +194,10 @@ def register():
         cur.close()
         conn.close()
 
-        # CHANGED: Return success but DON'T auto-login
         return jsonify({
             "success": True,
             "message": "Registration successful! Please login to continue.",
-            "requires_login": True  # Flag for the Android app to navigate to login
+            "requires_login": True
         })
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "message": "Email already exists"}), 400
@@ -309,8 +224,8 @@ def login():
 
         if user:
             return jsonify({
-                "success": True, 
-                "message": "Login successful!", 
+                "success": True,
+                "message": "Login successful!",
                 "participant_id": user["participant_id"],
                 "full_name": user["full_name"],
                 "age": user["age"],
@@ -373,8 +288,8 @@ def admin_login():
 
         if admin:
             return jsonify({
-                "success": True, 
-                "message": "Login successful!", 
+                "success": True,
+                "message": "Login successful!",
                 "admin_id": admin["admin_id"],
                 "full_name": admin["full_name"],
                 "email": admin["email"]
@@ -433,7 +348,8 @@ def get_auditions():
         print(traceback.format_exc())
         return jsonify({"success": False, "auditions": [], "message": str(e)}), 500
 
-# -------- SUBMIT AUDITION (UPDATED) --------
+# -------- UPDATED SUBMIT AUDITION (Only video/image) --------
+# -------- UPDATED SUBMIT AUDITION (Only video/image) --------
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
@@ -455,19 +371,13 @@ def submit_audition():
         except (ValueError, TypeError):
             return jsonify({"success": False, "message": "Invalid ID format"}), 400
 
-        # Get participant details from database
+        # Verify participant exists
         conn = get_db_connection()
         cur = conn.cursor()
-        
-        # Get participant info
-        cur.execute("""
-            SELECT full_name, age, gender, email 
-            FROM participants 
-            WHERE participant_id = %s
-        """, (participant_id,))
-        
-        participant = cur.fetchone()
-        if not participant:
+
+        # Just verify participant exists
+        cur.execute("SELECT 1 FROM participants WHERE participant_id = %s", (participant_id,))
+        if not cur.fetchone():
             cur.close()
             conn.close()
             return jsonify({"success": False, "message": "Participant not found"}), 404
@@ -492,24 +402,18 @@ def submit_audition():
         image.save(image_path_full)
 
         print(f"Files saved: {video_path_full}, {image_path_full}")
-        print(f"Files exist: {os.path.exists(video_path_full)}, {os.path.exists(image_path_full)}")
 
-        # Insert submission into DB using participant details from database
+        # FIXED: Insert submission into DB - only with the columns that exist!
         cur.execute("""
             INSERT INTO submissions
-            (participant_id, participant_name, participant_age, participant_gender,
-             participant_email, audition_id, video_path, image_path, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (participant_id, audition_id, video_path, image_path, status)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
         """, (
-            participant_id, 
-            participant['full_name'], 
-            participant['age'], 
-            participant['gender'],
-            participant['email'], 
-            audition_id, 
-            video_filename, 
-            image_filename, 
+            participant_id,
+            audition_id,
+            video_filename,
+            image_filename,
             'pending'
         ))
 
@@ -533,31 +437,7 @@ def submit_audition():
     except Exception as e:
         print(traceback.format_exc())
         return jsonify({"success": False, "message": "Server error", "error": str(e)}), 500
-
-# -------- TEST ENDPOINT TO VERIFY PARTICIPANT DETAILS --------
-@app.route('/test/participant/<int:participant_id>', methods=['GET'])
-def test_participant(participant_id):
-    """Test endpoint to verify participant details"""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT participant_id, full_name, age, gender, email 
-            FROM participants 
-            WHERE participant_id = %s
-        """, (participant_id,))
-        participant = cur.fetchone()
-        cur.close()
-        conn.close()
-        
-        if participant:
-            return jsonify({"success": True, "participant": participant})
-        else:
-            return jsonify({"success": False, "message": "Participant not found"}), 404
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
-# -------- ADMIN SUBMISSIONS --------
+# -------- UPDATED ADMIN SUBMISSIONS (with JOIN) --------
 @app.route('/admin/submissions', methods=['GET'])
 def get_submissions():
     try:
@@ -572,9 +452,11 @@ def get_submissions():
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            SELECT s.id, s.participant_id, s.participant_name, s.participant_age,
-                   s.participant_gender, s.participant_email, s.video_path, s.image_path, s.status
+            SELECT s.id, s.participant_id, s.video_path, s.image_path, s.status,
+                   p.full_name as participant_name, p.age as participant_age,
+                   p.gender as participant_gender, p.email as participant_email
             FROM submissions s
+            JOIN participants p ON s.participant_id = p.participant_id
             JOIN auditions a ON s.audition_id = a.audition_id
             WHERE a.created_by = %s
             ORDER BY s.id DESC
@@ -601,6 +483,46 @@ def get_submissions():
                 "video_filename": row.get("video_path"),
                 "image_filename": row.get("image_path"),
                 "status": row.get("status", "pending")
+            })
+
+        return jsonify({"success": True, "submissions": submissions})
+    except Exception as e:
+        print(traceback.format_exc())
+        return jsonify({"success": False, "message": str(e)}), 500
+
+# -------- PARTICIPANT SUBMISSIONS (View their own submissions) --------
+@app.route('/my_submissions/<int:participant_id>', methods=['GET'])
+def get_my_submissions(participant_id):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT s.id, s.video_path, s.image_path, s.status, s.created_at,
+                   a.title, a.description, a.audition_date, a.location
+            FROM submissions s
+            JOIN auditions a ON s.audition_id = a.audition_id
+            WHERE s.participant_id = %s
+            ORDER BY s.id DESC
+        """, (participant_id,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        submissions = []
+        for row in rows:
+            video_url = url_for('uploaded_file', filename=row['video_path'], _external=True) if row['video_path'] else None
+            image_url = url_for('uploaded_file', filename=row['image_path'], _external=True) if row['image_path'] else None
+
+            submissions.append({
+                "id": row.get("id"),
+                "video_url": video_url,
+                "image_url": image_url,
+                "status": row.get("status"),
+                "created_at": row.get("created_at"),
+                "audition_title": row.get("title"),
+                "audition_description": row.get("description"),
+                "audition_date": row.get("audition_date"),
+                "audition_location": row.get("location")
             })
 
         return jsonify({"success": True, "submissions": submissions})
