@@ -14,7 +14,6 @@ from email.mime.text import MIMEText
 app = Flask(__name__)
 CORS(app)
 
-# Get absolute path for uploads
 UPLOAD_FOLDER = "uploads"
 UPLOAD_FOLDER_ABSOLUTE = os.path.abspath(UPLOAD_FOLDER)
 os.makedirs(UPLOAD_FOLDER_ABSOLUTE, exist_ok=True)
@@ -44,7 +43,7 @@ def get_db_connection():
 
 # ---------- EMAIL FUNCTION ----------
 def send_notification(participant_id, status, venue=None, date=None, time=None):
-    if status.lower() == "approved":
+    if status.lower() == "approve" or status.lower() == "approved":
         message = f"Congratulations! Your audition is approved.\nVenue: {venue}\nDate: {date}\nTime: {time}"
     else:
         message = "We regret to inform you that your audition was not successful."
@@ -79,15 +78,12 @@ def debug_paths():
         cur.close()
         conn.close()
 
-        # Check if files exist
         result = []
         for sub in submissions:
-            # Try both possible paths
             video_paths_to_check = [
-                os.path.join(UPLOAD_FOLDER_ABSOLUTE, sub['video_path']),  # If just filename
-                sub['video_path']  # If full path
+                os.path.join(UPLOAD_FOLDER_ABSOLUTE, sub['video_path']),
+                sub['video_path']
             ]
-
             image_paths_to_check = [
                 os.path.join(UPLOAD_FOLDER_ABSOLUTE, sub['image_path']),
                 sub['image_path']
@@ -96,15 +92,8 @@ def debug_paths():
             video_exists = any(os.path.exists(path) for path in video_paths_to_check)
             image_exists = any(os.path.exists(path) for path in image_paths_to_check)
 
-            # Generate URLs if files exist
-            video_url = None
-            image_url = None
-            if video_exists:
-                filename = os.path.basename(sub['video_path'])
-                video_url = url_for('uploaded_file', filename=filename, _external=True)
-            if image_exists:
-                filename = os.path.basename(sub['image_path'])
-                image_url = url_for('uploaded_file', filename=filename, _external=True)
+            video_url = url_for('uploaded_file', filename=os.path.basename(sub['video_path']), _external=True) if video_exists else None
+            image_url = url_for('uploaded_file', filename=os.path.basename(sub['image_path']), _external=True) if image_exists else None
 
             result.append({
                 "id": sub['id'],
@@ -133,11 +122,8 @@ def debug_paths():
 @app.route('/uploads/<filename>')
 def uploaded_file(filename):
     try:
-        # Security: ensure filename doesn't contain path traversal
         if '..' in filename or filename.startswith('/'):
             return "Invalid filename", 400
-
-        # Send file from uploads folder
         return send_from_directory(UPLOAD_FOLDER_ABSOLUTE, filename)
     except Exception as e:
         print(f"Error serving file {filename}: {e}")
@@ -163,16 +149,10 @@ def get_file_url(submission_id, file_type):
             return jsonify({"success": False, "message": "Submission not found"}), 404
 
         file_path = result['video_path'] if file_type == 'video' else result['image_path']
-
-        # Extract just the filename
-        filename = os.path.basename(file_path)
-
-        # Generate URL
-        file_url = url_for('uploaded_file', filename=filename, _external=True)
-
-        # Check if file actually exists
-        full_path = os.path.join(UPLOAD_FOLDER_ABSOLUTE, filename)
+        filename = os.path.basename(file_path) if file_path else None
+        full_path = os.path.join(UPLOAD_FOLDER_ABSOLUTE, filename) if filename else ""
         file_exists = os.path.exists(full_path)
+        file_url = url_for('uploaded_file', filename=filename, _external=True) if file_exists else None
 
         return jsonify({
             "success": True,
@@ -186,7 +166,7 @@ def get_file_url(submission_id, file_type):
     except Exception as e:
         return jsonify({"success": False, "error": str(e), "traceback": traceback.format_exc()}), 500
 
-# ---------- ROUTES ----------
+# ---------- BASIC ROUTES ----------
 @app.route('/')
 def index():
     return jsonify({"message": "Server is running!"})
@@ -195,7 +175,7 @@ def index():
 def ping():
     return {"status": "ok"}
 
-# -------- PARTICIPANT REGISTRATION & LOGIN --------
+# ---------- PARTICIPANT & ADMIN ROUTES ----------
 @app.route('/register', methods=['POST'])
 def register():
     try:
@@ -225,7 +205,6 @@ def register():
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "message": "Email already exists"}), 400
     except Exception as e:
-        print("Error in /register:", traceback.format_exc())
         return jsonify({"success": False, "message": "Registration failed", "error": str(e)}), 500
 
 @app.route('/login', methods=['POST'])
@@ -250,10 +229,8 @@ def login():
         else:
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
     except Exception as e:
-        print("Error in /login:", traceback.format_exc())
         return jsonify({"success": False, "message": "Login failed", "error": str(e)}), 500
 
-# -------- ADMIN REGISTRATION & LOGIN --------
 @app.route('/admin_register', methods=['POST'])
 def admin_register():
     try:
@@ -281,7 +258,6 @@ def admin_register():
     except psycopg2.IntegrityError:
         return jsonify({"success": False, "message": "Email already exists"}), 400
     except Exception as e:
-        print("Error in /admin_register:", traceback.format_exc())
         return jsonify({"success": False, "message": "Registration failed", "error": str(e)}), 500
 
 @app.route('/admin_login', methods=['POST'])
@@ -306,10 +282,9 @@ def admin_login():
         else:
             return jsonify({"success": False, "message": "Invalid credentials"}), 401
     except Exception as e:
-        print("Error in /admin_login:", traceback.format_exc())
         return jsonify({"success": False, "message": "Login failed", "error": str(e)}), 500
 
-# -------- AUDITIONS --------
+# ---------- AUDITIONS ----------
 @app.route("/admin/post_audition", methods=["POST"])
 def post_audition():
     try:
@@ -335,7 +310,6 @@ def post_audition():
 
         return jsonify({"success": True, "message": "Audition posted successfully!"})
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route('/auditions', methods=['GET'])
@@ -351,17 +325,14 @@ def get_auditions():
         auditions = cur.fetchall()
         cur.close()
         conn.close()
-
         return jsonify({"success": True, "auditions": auditions})
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"success": False, "auditions": [], "message": str(e)}), 500
 
-# -------- SUBMIT AUDITION --------
+# ---------- SUBMIT AUDITION ----------
 @app.route('/submit_audition', methods=['POST'])
 def submit_audition():
     try:
-        # ---------- 1 Get form data ----------
         name = request.form.get('name')
         age = request.form.get('age')
         gender = request.form.get('gender')
@@ -372,49 +343,34 @@ def submit_audition():
         video = request.files.get('video')
         image = request.files.get('image')
 
-        # ---------- 2 Validate required fields ----------
         if not all([name, age, gender, email, participant_id, audition_id, video, image]):
             return jsonify({"success": False, "message": "All fields are required"}), 400
 
-        # ---------- 3 Convert IDs and age safely ----------
         try:
             participant_id = int(participant_id)
-        except (ValueError, TypeError):
-            return jsonify({"success": False, "message": "Invalid participant_id"}), 400
-
-        try:
             audition_id = int(audition_id)
-        except (ValueError, TypeError):
-            return jsonify({"success": False, "message": "Invalid audition_id"}), 400
-
-        try:
             age = int(age)
         except (ValueError, TypeError):
-            return jsonify({"success": False, "message": "Age must be a number"}), 400
+            return jsonify({"success": False, "message": "IDs and age must be numbers"}), 400
 
-        # ---------- 4 Check audition exists ----------
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("SELECT 1 FROM auditions WHERE audition_id = %s", (audition_id,))
         if not cur.fetchone():
             return jsonify({"success": False, "message": f"Audition ID {audition_id} does not exist"}), 400
 
-        # ---------- 5 Save uploaded files with unique filenames ----------
-        # Generate unique filenames
         video_filename = f"{uuid.uuid4()}_{secure_filename(video.filename)}"
         image_filename = f"{uuid.uuid4()}_{secure_filename(image.filename)}"
 
-        # Save to absolute path
         video_path_full = os.path.join(UPLOAD_FOLDER_ABSOLUTE, video_filename)
         image_path_full = os.path.join(UPLOAD_FOLDER_ABSOLUTE, image_filename)
 
         video.save(video_path_full)
         image.save(image_path_full)
 
-        print(f"Files saved: {video_path_full}, {image_path_full}")
-        print(f"Files exist: {os.path.exists(video_path_full)}, {os.path.exists(image_path_full)}")
+        print(f"Saved video: {video_filename}, exists: {os.path.exists(video_path_full)}")
+        print(f"Saved image: {image_filename}, exists: {os.path.exists(image_path_full)}")
 
-        # ---------- 6 Insert submission into DB (store only filename) ----------
         cur.execute("""
             INSERT INTO submissions
             (participant_id, participant_name, participant_age, participant_gender,
@@ -428,7 +384,6 @@ def submit_audition():
         cur.close()
         conn.close()
 
-        # ---------- 7 Return success with file URLs ----------
         video_url = url_for('uploaded_file', filename=video_filename, _external=True)
         image_url = url_for('uploaded_file', filename=image_filename, _external=True)
 
@@ -441,12 +396,10 @@ def submit_audition():
             "video_filename": video_filename,
             "image_filename": image_filename
         })
-
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"success": False, "message": "Server error", "error": str(e)}), 500
 
-# -------- ADMIN SUBMISSIONS --------
+# ---------- ADMIN SUBMISSIONS ----------
 @app.route('/admin/submissions', methods=['GET'])
 def get_submissions():
     try:
@@ -474,9 +427,17 @@ def get_submissions():
 
         submissions = []
         for row in rows:
-            # Generate full URLs for files
-            video_url = url_for('uploaded_file', filename=row['video_path'], _external=True) if row['video_path'] else None
-            image_url = url_for('uploaded_file', filename=row['image_path'], _external=True) if row['image_path'] else None
+            video_filename = os.path.basename(row['video_path']) if row['video_path'] else None
+            image_filename = os.path.basename(row['image_path']) if row['image_path'] else None
+
+            video_full_path = os.path.join(UPLOAD_FOLDER_ABSOLUTE, video_filename) if video_filename else ""
+            image_full_path = os.path.join(UPLOAD_FOLDER_ABSOLUTE, image_filename) if image_filename else ""
+
+            video_exists = os.path.exists(video_full_path)
+            image_exists = os.path.exists(image_full_path)
+
+            video_url = url_for('uploaded_file', filename=video_filename, _external=True) if video_exists else None
+            image_url = url_for('uploaded_file', filename=image_filename, _external=True) if image_exists else None
 
             submissions.append({
                 "id": row.get("id"),
@@ -485,18 +446,20 @@ def get_submissions():
                 "participant_age": row.get("participant_age"),
                 "participant_gender": row.get("participant_gender"),
                 "participant_email": row.get("participant_email"),
-                "video_path": video_url,  # Now this is a full URL
-                "image_path": image_url,  # Now this is a full URL
-                "video_filename": row.get("video_path"),
-                "image_filename": row.get("image_path"),
+                "video_url": video_url,
+                "image_url": image_url,
+                "video_filename": video_filename,
+                "image_filename": image_filename,
+                "video_exists": video_exists,
+                "image_exists": image_exists,
                 "status": row.get("status", "pending")
             })
 
         return jsonify({"success": True, "submissions": submissions})
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
+# ---------- NOTIFICATIONS ----------
 @app.route("/notifications/<int:participant_id>", methods=["GET"])
 def get_notifications(participant_id):
     try:
@@ -513,7 +476,6 @@ def get_notifications(participant_id):
         conn.close()
         return jsonify({"success": True, "notifications": notifications})
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"success": False, "message": str(e)}), 500
 
 # ---------- APPROVE / REJECT SUBMISSION ----------
@@ -523,40 +485,30 @@ def submission_action():
         data = request.get_json()
         submission_id = data.get("submission_id")
         action = data.get("action")  # "approve" or "reject"
-        venue = data.get("venue")  # optional, only for approve
-        date = data.get("date")    # optional, only for approve
-        time = data.get("time")    # optional, only for approve
+        venue = data.get("venue")
+        date = data.get("date")
+        time = data.get("time")
 
         if not all([submission_id, action]) or action not in ["approve", "reject"]:
             return jsonify({"success": False, "message": "Invalid data"}), 400
 
         conn = get_db_connection()
         cur = conn.cursor()
-
-        # Fetch participant_id first
         cur.execute("SELECT participant_id FROM submissions WHERE id=%s", (submission_id,))
         row = cur.fetchone()
         if not row:
             return jsonify({"success": False, "message": "Submission not found"}), 404
 
         participant_id = row["participant_id"]
-
-        # Update submission status
-        cur.execute(
-            "UPDATE submissions SET status=%s WHERE id=%s",
-            (action, submission_id)
-        )
+        cur.execute("UPDATE submissions SET status=%s WHERE id=%s", (action, submission_id))
         conn.commit()
         cur.close()
         conn.close()
 
-        # Send in-app notification
         send_notification(participant_id, action, venue=venue, date=date, time=time)
 
         return jsonify({"success": True, "message": f"Submission {action}d successfully!"})
-
     except Exception as e:
-        print(traceback.format_exc())
         return jsonify({"success": False, "message": "Server error", "error": str(e)}), 500
 
 # ---------- MAIN ----------
