@@ -554,11 +554,15 @@ def get_notifications(participant_id):
 def submission_action():
     try:
         data = request.get_json()
+        print("Received data:", data)  # DEBUG: See what's coming from frontend
+
         submission_id = data.get("submission_id")
         action = data.get("action")
         venue = data.get("venue")
         date = data.get("date")
         time = data.get("time")
+
+        print(f"Processing: ID={submission_id}, Action={action}")  # DEBUG
 
         if not all([submission_id, action]) or action not in ["approve", "reject"]:
             return jsonify({"success": False, "message": "Invalid data"}), 400
@@ -566,32 +570,56 @@ def submission_action():
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Fetch participant_id first
-        cur.execute("SELECT participant_id FROM submissions WHERE id=%s", (submission_id,))
-        row = cur.fetchone()
-        if not row:
+        # First, check if submission exists
+        cur.execute("SELECT s.id, s.participant_id, s.status, p.full_name, p.email FROM submissions s JOIN participants p ON s.participant_id = p.participant_id WHERE s.id=%s", (submission_id,))
+        submission = cur.fetchone()
+
+        if not submission:
+            print(f"Submission {submission_id} not found!")  # DEBUG
             return jsonify({"success": False, "message": "Submission not found"}), 404
 
-        participant_id = row["participant_id"]
+        print(f"Found submission: {submission}")  # DEBUG
 
         # Update submission status
         cur.execute(
-            "UPDATE submissions SET status=%s WHERE id=%s",
+            "UPDATE submissions SET status=%s WHERE id=%s RETURNING id",
             (action, submission_id)
         )
+        updated = cur.fetchone()
         conn.commit()
+
+        print(f"Update result: {updated}")  # DEBUG
+
+        # Create notification message
+        if action == "approve":
+            if not all([venue, date, time]):
+                return jsonify({"success": False, "message": "Venue, date, and time required for approval"}), 400
+            message = f"Congratulations! Your audition is approved.\nVenue: {venue}\nDate: {date}\nTime: {time}"
+        else:
+            message = "We regret to inform you that your audition was not successful."
+
+        # Insert notification
+        cur.execute(
+            "INSERT INTO notifications (participant_id, message) VALUES (%s, %s) RETURNING id",
+            (submission['participant_id'], message)
+        )
+        notification_id = cur.fetchone()
+        conn.commit()
+
+        print(f"Notification created: {notification_id}")  # DEBUG
+
         cur.close()
         conn.close()
 
-        # Send in-app notification
-        send_notification(participant_id, action, venue=venue, date=date, time=time)
-
-        return jsonify({"success": True, "message": f"Submission {action}d successfully!"})
+        return jsonify({
+            "success": True,
+            "message": f"Submission {action}d successfully!",
+            "notification_sent": bool(notification_id)
+        })
 
     except Exception as e:
-        print(traceback.format_exc())
+        print("ERROR in submission_action:", traceback.format_exc())  # Full error trace
         return jsonify({"success": False, "message": "Server error", "error": str(e)}), 500
-
 # ---------- MAIN ----------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
